@@ -1,0 +1,8 @@
+[Core]
+name = StandUp
+module = standup
+
+[Documentation]
+description = This is a simple standup plugin that get the current status of the team and optionally send a reporting email.
+
+
