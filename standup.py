@@ -1,5 +1,6 @@
 from errbot import BotPlugin, botcmd
 import smtplib
+from email.mime.text import MIMEText
 import datetime
 
 ALL_MEMBERS = 'members'
@@ -26,13 +27,15 @@ class Standup(BotPlugin):
                 'smtp_to': 'my_group@example.com',
                 'smtp_login': 'me@example.com',
                 'smtp_password': 'ascf123532',
-                'smtp_server': 'smtp.gmail.com:587',
+                'smtp_server': 'smtp.gmail.com',
+                'smtp_port': '587',
+                'team_name': 'my team',
                }
 
     @property
     def members(self):
        if ALL_MEMBERS in self:
-           return ','.join(str(m) for m in self[ALL_MEMBERS])
+           return ','.join(self[ALL_MEMBERS])
        return None
 
     @botcmd
@@ -48,7 +51,7 @@ class Standup(BotPlugin):
 
         self._started = True
         self[CURRENT_STANDUP] = {}
-        yield 'Please %s standup !' % ' '.join(str(m) for m in self[ALL_MEMBERS])
+        yield 'Team %s, please %s standup !' % (self.config['team_name'], ' '.join(self[ALL_MEMBERS]))
         yield 'What did you do yesterday and what were your blockers ? Answer by mentioning me "%s I did blah ..."' % self.bot_identifier
 
     @botcmd
@@ -63,16 +66,23 @@ class Standup(BotPlugin):
         if not self.config:
             return 'This plugin is not configured.'
 
-        server = smtplib.SMTP(self.config['smtp_server'])
+        server = smtplib.SMTP(self.config['smtp_server'], int(self.config['smtp_port']))
         server.ehlo()
         server.starttls()
-        server.login(self.config['smtp_server'], self.config['smtp_password'])
+        server.login(self.config['smtp_login'], self.config['smtp_password'])
 
+        frm, to = self.config['smtp_from'], self.config['smtp_to']
         now = datetime.datetime.now()
-        body = 'Standup for %s-%s-%s\n\n' % (now.year, now.month, now.day)
-        for member, message in self[CURRENT_STANDUP]:
-            body += '*%s*:\n%s\n\n' % (member, message)
-        server.sendmail(self.config['smtp_from'], self.config['smtp_to'], body)
+        subject = 'Standup for %s [%s-%s-%s]' % (self.config['team_name'], now.year, now.month, now.day)
+        body = subject + '\n\n' 
+        for member, message in self[CURRENT_STANDUP].items():
+            body += '- %s:\n"%s"\n\n\n' % (member, message)
+
+        msg = MIMEText(body)
+        msg['Subject']  = subject
+        msg['From'] = frm
+        msg['To'] = to
+        server.sendmail(frm, [to], msg.as_string())
         server.quit()
 
     @botcmd
@@ -81,7 +91,7 @@ class Standup(BotPlugin):
         if not self[CURRENT_STANDUP]:
             yield 'I have no last standup recorded.'
             return
-        for member, message in self[CURRENT_STANDUP]:
+        for member, message in self[CURRENT_STANDUP].items():
             yield '*%s*:\n\n%s\n' % (member, message)
 
     def callback_mention(self, message, mentioned_people):
@@ -89,32 +99,32 @@ class Standup(BotPlugin):
             if message.frm != self.bot_identifier:  # the initial example.
                 send_to = message.frm.room if message.is_group else message.frm
                 with self.mutable(CURRENT_STANDUP) as standups:
-                    standups[message.frm] = message.body.replace(str(self.bot_identifier), '')
+                    standups[str(message.frm)] = message.body.replace(str(self.bot_identifier), '')
                 self.send(send_to, 'Noted %s, thank you.' % message.frm)
 
     @botcmd
     def standup_add(self, msg, args):
         """Adds a new team member."""
         try:
-            idd = self.build_identifier(args)
+            canonicalid = str(self.build_identifier(args))
         except Exception as e:
             return 'Could not build a valid chat identifier from %s: %s' % (args, e)
         with self.mutable(ALL_MEMBERS) as members:
-            if idd in members:
-                return '%s is already a members.' % str(idd)
-            members.append(idd)
+            if canonicalid in members:
+                return '%s is already a members.' % canonicalid
+            members.append(canonicalid)
         return 'Done.\n\nAll members: %s.' % self.members
 
     @botcmd
     def standup_remove(self, msg, args):
         """Remove a team member."""
         try:
-            idd = self.build_identifier(args)
+            canonicalid = str(self.build_identifier(args))
         except Exception as e:
             return 'Could not build a valid chat identifier from %s: %s' % (args, e)
         with self.mutable(ALL_MEMBERS) as members:
-            if idd not in members:
-                return 'Cannot find %s in members.' % str(idd)
+            if canonicalid not in members:
+                return 'Cannot find %s in members.' % canonicalid
             members.remove(idd)
 
         return 'Done.\n\nAll members: %s.' % self.members
