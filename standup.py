@@ -84,6 +84,7 @@ class Standup(BotPlugin):
         msg['To'] = to
         server.sendmail(frm, [to], msg.as_string())
         server.quit()
+        return "Message sent to %s." % to
 
     @botcmd
     def standup_last(self, msg, args):
@@ -94,13 +95,13 @@ class Standup(BotPlugin):
         for member, message in self[CURRENT_STANDUP].items():
             yield '*%s*:\n\n%s\n' % (member, message)
 
-    def callback_mention(self, message, mentioned_people):
-        if self._started and self.bot_identifier in mentioned_people:
-            if message.frm != self.bot_identifier:  # the initial example.
-                send_to = message.frm.room if message.is_group else message.frm
+    def callback_mention(self, msg, mentioned_people):
+        if self._started and not self._bot.is_from_self(msg) and self.bot_identifier in mentioned_people:
+            if msg.frm != self.bot_identifier:  # the initial example.
+                send_to = msg.frm.room if msg.is_group else msg.frm
                 with self.mutable(CURRENT_STANDUP) as standups:
-                    standups[str(message.frm)] = message.body.replace(str(self.bot_identifier), '')
-                self.send(send_to, 'Noted %s, thank you.' % message.frm)
+                    standups[str(msg.frm)] = msg.body.replace(str(self.bot_identifier), '')
+                self.send(send_to, '%s, got it, thank you.' % msg.frm.nick)
 
     @botcmd
     def standup_add(self, msg, args):
@@ -126,12 +127,10 @@ class Standup(BotPlugin):
             if canonicalid not in members:
                 return 'Cannot find %s in members.' % canonicalid
             members.remove(idd)
-
         return 'Done.\n\nAll members: %s.' % self.members
 
     @botcmd
     def standup_status(self, msg, args):
         """Status of the standup plugin."""
-
         return 'All members: %s.' % self.members
 
