@@ -69,6 +69,10 @@ class Standup(BotPlugin):
     @arg_botcmd('name', type=str)
     def standup_teams_add(self, msg, name, room, email):
         """Creates a team. You need to specify in which channel the team usually is."""
+        # Slack gobbles the #
+        if self.mode == 'slack' and room[0] != '#':
+            room = '#' + room
+
         try:
             r = self.build_identifier(room)
             assert isinstance(r, Room)
@@ -80,6 +84,7 @@ class Standup(BotPlugin):
             self.add_team(team)
         except ValueError as v:
             return str(v)
+        return 'Team added.'
 
     @arg_botcmd('name', type=str)
     def standup_teams_remove(self, msg, name):
@@ -91,6 +96,7 @@ class Standup(BotPlugin):
 
         with self.mutable(TEAMS) as teams:
             teams.remove(team)
+        return 'Team removed.'
 
     @botcmd
     def standup_teams(self, msg, _):
