@@ -33,7 +33,7 @@ class Standup(BotPlugin):
             if name:
                 return self.find_team_by_name(name), None
             if msg.is_group:
-                return self.find_team_by_room(msg.room), None
+                return self.find_team_by_room(msg.frm.room), None
         except ValueError as v:
             return None, str(v)
         return None, 'Either you need to execute the command in a room or pass it a team name as parameter'
@@ -147,7 +147,7 @@ class Standup(BotPlugin):
             team.members.remove(canonicalid)
             return f'Done.\n\nAll remaining members for {team_name}: {", ".join(team.members)}.'
 
-    @arg_botcmd('team_name', type=str)
+    @arg_botcmd('team_name', type=str, nargs='?')
     def standup_start(self, msg, team_name=None):
         """Manually start the standup meeting in this room."""
         team, err = self.find_team_from_msg_or_name(msg, team_name)
@@ -169,7 +169,7 @@ Answer by mentioning me "{self.bot_identifier} I did something something ..."'
 
         self.send(self.build_identifier(team.room), blurb)
 
-    @arg_botcmd('team_name', type=str)
+    @arg_botcmd('team_name', type=str, nargs='?')
     def standup_end(self, msg, team_name=None):
         """Ends the standup and send the summary email."""
         if not self.config:
@@ -203,7 +203,7 @@ Answer by mentioning me "{self.bot_identifier} I did something something ..."'
 
         return f'Message sent to {to}.'
 
-    @arg_botcmd('team_name', type=str, default=None)
+    @arg_botcmd('team_name', type=str, nargs='?')
     def standup_status(self, msg, team_name = None):
         """Gives the current state of the standup."""
         team, err = self.find_team_from_msg_or_name(msg, team_name)
@@ -224,6 +224,25 @@ Answer by mentioning me "{self.bot_identifier} I did something something ..."'
         yield '## All the current messages'
         for member, message in member_messages:
             yield f'*{member}*:\n\n{message}\n'
+        left = set(team.members) - set(self[STANDUPS][team.name])
+        if left:
+            yield f'I am still waiting on {", ".join(left)}'
+        else:
+            yield f'Everybody had reported, you are ready to !standup end'
+
+    @arg_botcmd('team_name', type=str, nargs='?')
+    def standup_cancel(self, msg, team_name=None):
+        team, err = self.find_team_from_msg_or_name(msg, team_name)
+        if not team:
+            return err
+
+        if team.name not in self[STANDUPS]:
+            return f'I have no active standup for {team.name}.'
+
+        with self.mutable(STANDUPS) as su:
+            del su[team.name]
+
+        return f'Standup for {team.name} cancelled'
 
     @arg_botcmd('message', type=str)
     @arg_botcmd('member', type=str)
@@ -254,12 +273,12 @@ Answer by mentioning me "{self.bot_identifier} I did something something ..."'
         send_to = msg.frm.room if msg.is_group else msg.frm
         team, err = self.find_team_from_msg_or_name(msg, None)
 
-        if not team or team not in self[STANDUPS]:
+        if not team or team.name not in self[STANDUPS]:
             # simply no team associated with this room or no standup
             return
-
+        person = msg.frm.person if msg.is_group else str(msg.frm)
         with self.mutable(STANDUPS) as standups:
-            standups[team.name][str(msg.frm)] = msg.body.replace(str(self.bot_identifier), '')
+            standups[team.name][person] = msg.body.replace(str(self.bot_identifier), '')
 
         self.send(send_to, f'{msg.frm.nick}, got it, thank you.')
 
