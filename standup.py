@@ -1,82 +1,195 @@
-from errbot import BotPlugin, botcmd
+from collections import namedtuple
+import datetime
 import smtplib
 from email.mime.text import MIMEText
-import datetime
 
-ALL_MEMBERS = 'members'
-CURRENT_STANDUP = 'current_standup'
+from errbot import BotPlugin, botcmd, arg_botcmd
+from errbot.backends.base import Room
+
+TEAMS = 'teams'
+STANDUPS = 'standups'
+
+Team = namedtuple('Team', ['name', 'room', 'email', 'members'])
 
 class Standup(BotPlugin):
     """
     This is a simple standup plugin that get the current status of the team and optionally send a reporting email.
     """
+    def find_team_by_name(self, name):
+        for t in self[TEAMS]:
+            if t.name == name:
+                return t
+        return None
+
+    def find_team_by_room(self, room):
+        room = str(room)
+        for t in self[TEAMS]:
+            if t.room == room:
+                return t
+        return None
+
+    def find_team_from_msg_or_name(self, msg, name=None):
+        try:
+            if name:
+                return self.find_team_by_name(name), None
+            if msg.is_group:
+                return self.find_team_by_room(msg.room), None
+        except ValueError as v:
+            return None, str(v)
+        return None, 'Either you need to execute the command in a room or pass it a team name as parameter'
+
+    def add_team(self, team):
+        if self.find_team_by_name(team.name) is not None:
+            raise ValueError(f'A team with the name {team.name} already exist')
+        if self.find_team_by_room(team.room) is not None:
+            raise ValueError(f'A team in the channel {team.channel} already exist')
+        with self.mutable(TEAMS) as teams:
+            teams.append(team)
 
     def activate(self):
         super(Standup, self).activate()
-        if ALL_MEMBERS not in self:
-            self[ALL_MEMBERS] = []
-        if CURRENT_STANDUP not in self:
-            self[CURRENT_STANDUP] = {}
-        self._started = False
+        if TEAMS not in self:
+            self[TEAMS] = []
+        if STANDUPS not in self:
+            self[STANDUPS] = {}
 
     def deactivate(self):
         super(Standup, self).deactivate()
 
     def get_configuration_template(self):
         return {'smtp_from': 'me@example.com',
-                'smtp_to': 'my_group@example.com',
                 'smtp_login': 'me@example.com',
                 'smtp_password': 'ascf123532',
                 'smtp_server': 'smtp.gmail.com',
                 'smtp_port': '587',
-                'team_name': 'my team',
                }
 
-    @property
-    def members(self):
-       if ALL_MEMBERS in self:
-           return ','.join(self[ALL_MEMBERS])
-       return None
+    @arg_botcmd('email', type=str)
+    @arg_botcmd('room', type=str)
+    @arg_botcmd('name', type=str)
+    def standup_teams_add(self, msg, name, room, email):
+        """Creates a team. You need to specify in which channel the team usually is."""
+        try:
+            r = self.build_identifier(room)
+            assert isinstance(r, Room)
+        except Exception as e:
+            return f'Could not build a valid room from {room}: {e}'
+
+        team = Team(name=name, room=room, email=email, members=[])
+        try:
+            self.add_team(team)
+        except ValueError as v:
+            return str(v)
+
+    @arg_botcmd('name', type=str)
+    def standup_teams_remove(self, msg, name):
+        """Delete a team."""
+        team = self.find_team_by_name(name)
+
+        if not team:
+            return f'Cannot find the team {name}'
+
+        with self.mutable(TEAMS) as teams:
+            teams.remove(team)
 
     @botcmd
-    def standup_start(self, msg, args):
+    def standup_teams(self, msg, _):
+        """List the current teams."""
+        if not self[TEAMS]:
+            yield 'No team.'
+            return
+
+        for team in self[TEAMS]:
+            yield team
+
+
+    @arg_botcmd('member', type=str)
+    @arg_botcmd('team_name', type=str)
+    def standup_members_add(self, msg, team_name, member):
+        """Adds a new team member."""
+        try:
+            canonicalid = str(self.build_identifier(member))
+        except Exception as e:
+            return f'Could not build a valid chat identifier from {member}: {e}'
+        with self.mutable(TEAMS) as teams:
+            for team in teams:
+                if team.name == team_name:
+                    break
+            else:
+                return f'Cannot find the team {team_name}.'
+
+            if canonicalid in team.members:
+                return f'{canonicalid} is already a members.'
+
+            team.members.append(canonicalid)
+        return f'Done.\n\nAll members for {team_name}: {", ".join(team.members)}.'
+
+    @arg_botcmd('member', type=str)
+    @arg_botcmd('team_name', type=str)
+    def standup_members_remove(self, msg, team_name, member):
+        """Remove a team member."""
+        """Adds a new team member."""
+        try:
+            canonicalid = str(self.build_identifier(member))
+        except Exception as e:
+            return f'Could not build a valid chat identifier from {member}: {e}'
+
+        with self.mutable(TEAMS) as teams:
+            for team in teams:
+                if team.name == team_name:
+                    break
+            else:
+                return f'Cannot find the team {team_name}.'
+
+            if canonicalid not in team.members:
+                return f'{canonicalid} is not a member of {team_name}.'
+
+            team.members.remove(canonicalid)
+            return f'Done.\n\nAll remaining members for {team_name}: {", ".join(team.members)}.'
+
+    @arg_botcmd('team_name', type=str)
+    def standup_start(self, msg, team_name=None):
         """Manually start the standup meeting in this room."""
-        if not self.members:
-            yield 'You need to add team members first'
-            return
+        team, err = self.find_team_from_msg_or_name(msg, team_name)
+        if not team:
+            return err
 
-        if self._started:
-            yield 'Hmm, this standup was already started, you can stop it with "!standup stop"'
-            return
+        if not team.members:
+            return 'You need to add team members first'
 
-        self._started = True
-        self[CURRENT_STANDUP] = {}
-        yield 'Team %s, please %s standup !' % (self.config['team_name'], ' '.join(self[ALL_MEMBERS]))
-        yield 'What did you do yesterday and what were your blockers ? Answer by mentioning me "%s I did blah ..."' % self.bot_identifier
+        if team.name in self[STANDUPS]:
+            return 'Hmm, this standup was already started, you can stop it with "!standup stop"'
 
-    @botcmd
-    def standup_stop(self, msg, args):
-        """Manually stop the standup meeting in this room even if not all team members answered."""
-        self._started = False
-        return 'Thanks, I am archiving this standup.'
+        with self.mutable(STANDUPS) as standups:
+            standups[team.name] = {}
 
-    @botcmd
-    def standup_send(self, msg, args):
-        """Send the summary email."""
+        blurb = f'Team {team.name}, please {" ".join(team.members)} standup !\n\n \
+What did you do yesterday and what were your blockers ? \n\n\
+Answer by mentioning me "{self.bot_identifier} I did something something ..."'
+
+        self.send(self.build_identifier(team.room), blurb)
+
+    @arg_botcmd('team_name', type=str)
+    def standup_end(self, msg, team_name=None):
+        """Ends the standup and send the summary email."""
         if not self.config:
             return 'This plugin is not configured.'
+
+        team, err = self.find_team_from_msg_or_name(msg, team_name)
+        if not team:
+            return err
 
         server = smtplib.SMTP(self.config['smtp_server'], int(self.config['smtp_port']))
         server.ehlo()
         server.starttls()
         server.login(self.config['smtp_login'], self.config['smtp_password'])
 
-        frm, to = self.config['smtp_from'], self.config['smtp_to']
+        frm, to = self.config['smtp_from'], team.email
         now = datetime.datetime.now()
-        subject = 'Standup for %s [%s-%s-%s]' % (self.config['team_name'], now.year, now.month, now.day)
-        body = subject + '\n\n' 
-        for member, message in self[CURRENT_STANDUP].items():
-            body += '- %s:\n"%s"\n\n\n' % (member, message)
+        subject = f'Standup for {team.name} [{now.year}-{now.month}-{now.day}]'
+        body = subject + '\n\n'
+        for member, message in self[STANDUPS][team.name].items():
+            body += f'- {member}:\n"{message}"\n\n\n'
 
         msg = MIMEText(body)
         msg['Subject']  = subject
@@ -84,53 +197,69 @@ class Standup(BotPlugin):
         msg['To'] = to
         server.sendmail(frm, [to], msg.as_string())
         server.quit()
-        return "Message sent to %s." % to
 
-    @botcmd
-    def standup_last(self, msg, args):
-        """Gives what was said at the last standup."""
-        if not self[CURRENT_STANDUP]:
-            yield 'I have no last standup recorded.'
+        with self.mutable(STANDUPS) as su:
+            del su[team.name]
+
+        return f'Message sent to {to}.'
+
+    @arg_botcmd('team_name', type=str, default=None)
+    def standup_status(self, msg, team_name = None):
+        """Gives the current state of the standup."""
+        team, err = self.find_team_from_msg_or_name(msg, team_name)
+        if not team:
+            yield err
             return
-        for member, message in self[CURRENT_STANDUP].items():
-            yield '*%s*:\n\n%s\n' % (member, message)
+
+        if team.name not in self[STANDUPS]:
+            yield f'I have no active standup for {team.name}.'
+            return
+
+        member_messages = self[STANDUPS][team.name].items()
+
+        if not member_messages:
+            yield 'The standup has started but nobody has reported anything yet.'
+            return
+
+        yield '## All the current messages'
+        for member, message in member_messages:
+            yield f'*{member}*:\n\n{message}\n'
+
+    @arg_botcmd('message', type=str)
+    @arg_botcmd('member', type=str)
+    @arg_botcmd('team_name', type=str)
+    def standup_cover(self, msg, team_name, member, message):
+        """Cover for a teammate and report for him."""
+
+        team = self.find_team_by_name(team_name)
+
+        if not team:
+            return f'Cannot find the team {team_name}.'
+
+        if team.name not in self[STANDUPS]:
+            return f'There is no active standup for {team.name}.'
+
+        with self.mutable(STANDUPS) as standups:
+            standups[team.name][member] = message
+
+        return f'Message recorded for {member}.'
 
     def callback_mention(self, msg, mentioned_people):
-        if self._started and not self._bot.is_from_self(msg) and self.bot_identifier in mentioned_people:
-            if msg.frm != self.bot_identifier:  # the initial example.
-                send_to = msg.frm.room if msg.is_group else msg.frm
-                with self.mutable(CURRENT_STANDUP) as standups:
-                    standups[str(msg.frm)] = msg.body.replace(str(self.bot_identifier), '')
-                self.send(send_to, '%s, got it, thank you.' % msg.frm.nick)
+        if self._bot.is_from_self(msg) or msg.frm == self.bot_identifier:
+            return
 
-    @botcmd
-    def standup_add(self, msg, args):
-        """Adds a new team member."""
-        try:
-            canonicalid = str(self.build_identifier(args))
-        except Exception as e:
-            return 'Could not build a valid chat identifier from %s: %s' % (args, e)
-        with self.mutable(ALL_MEMBERS) as members:
-            if canonicalid in members:
-                return '%s is already a members.' % canonicalid
-            members.append(canonicalid)
-        return 'Done.\n\nAll members: %s.' % self.members
+        if self.bot_identifier not in mentioned_people:
+            return
 
-    @botcmd
-    def standup_remove(self, msg, args):
-        """Remove a team member."""
-        try:
-            canonicalid = str(self.build_identifier(args))
-        except Exception as e:
-            return 'Could not build a valid chat identifier from %s: %s' % (args, e)
-        with self.mutable(ALL_MEMBERS) as members:
-            if canonicalid not in members:
-                return 'Cannot find %s in members.' % canonicalid
-            members.remove(idd)
-        return 'Done.\n\nAll members: %s.' % self.members
+        send_to = msg.frm.room if msg.is_group else msg.frm
+        team, err = self.find_team_from_msg_or_name(msg, None)
 
-    @botcmd
-    def standup_status(self, msg, args):
-        """Status of the standup plugin."""
-        return 'All members: %s.' % self.members
+        if not team or team not in self[STANDUPS]:
+            # simply no team associated with this room or no standup
+            return
+
+        with self.mutable(STANDUPS) as standups:
+            standups[team.name][str(msg.frm)] = msg.body.replace(str(self.bot_identifier), '')
+
+        self.send(send_to, f'{msg.frm.nick}, got it, thank you.')
 
