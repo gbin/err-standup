@@ -173,7 +173,9 @@ class Standup(BotPlugin):
 What did you do yesterday and what were your blockers ? \n\n\
 Answer by mentioning me "{self.bot_identifier} I did something something ..."'
 
-        self.send(self.build_identifier(team.room), blurb)
+        self.send(identifier=self.build_identifier(team.room),
+                  text=blurb,
+                  in_reply_to=msg)
 
     @arg_botcmd('team_name', type=str, nargs='?')
     def standup_end(self, msg, team_name=None):
