@@ -288,5 +288,9 @@ Answer by mentioning me "{self.bot_identifier} I did something something ..."'
         with self.mutable(STANDUPS) as standups:
             standups[team.name][person] = msg.body.replace(str(self.bot_identifier), '')
 
-        self.send(send_to, f'{msg.frm.nick}, got it, thank you.')
+        if self.mode == 'slack':
+            self._bot.add_reaction(msg, 'floppy_disk')
+            self._bot.add_reaction(msg, 'thumbsup')
+        else:
+            self.send(send_to, f'{msg.frm.nick}, got it, thank you.')
 
