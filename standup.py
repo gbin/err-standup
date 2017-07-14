@@ -164,7 +164,7 @@ class Standup(BotPlugin):
             return 'You need to add team members first'
 
         if team.name in self[STANDUPS]:
-            return 'Hmm, this standup was already started, you can stop it with "!standup stop"'
+            return 'Hmm, this standup was already started, you can stop it with "!standup end"'
 
         with self.mutable(STANDUPS) as standups:
             standups[team.name] = {}
