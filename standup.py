@@ -157,7 +157,6 @@ class Standup(BotPlugin):
     @arg_botcmd('team_name', type=str)
     def standup_members_remove(self, msg, team_name, member):
         """Remove a team member."""
-        """Adds a new team member."""
         try:
             canonicalid = str(self.build_identifier(member))
         except Exception as e:
