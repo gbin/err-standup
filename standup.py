@@ -98,6 +98,29 @@ class Standup(BotPlugin):
             teams.remove(team)
         return 'Team removed.'
 
+    @arg_botcmd('email', type=str)
+    @arg_botcmd('name', type=str, default=None)
+    def standup_team_configure(self, msg, email, name):
+        """Reconfigure email address for a team."""
+        team = find_team_from_msg_or_name(msg, name)
+        if not team:
+            return f'Cannot find the team {name}'
+        team.email = email
+        with self.mutable(TEAMS) as teams:
+            for team in teams:
+                if name:
+                    if team.name == name:
+                        break
+                elif msg.room.frm == team.room:
+                    break
+            else:
+                if name:
+                    return f'Cannot find the team {name}'
+                else:
+                    return f'This room does not contain a team'
+
+            team.email = email
+
     @botcmd
     def standup_teams(self, msg, _):
         """List the current teams."""
@@ -134,7 +157,6 @@ class Standup(BotPlugin):
     @arg_botcmd('team_name', type=str)
     def standup_members_remove(self, msg, team_name, member):
         """Remove a team member."""
-        """Adds a new team member."""
         try:
             canonicalid = str(self.build_identifier(member))
         except Exception as e:
